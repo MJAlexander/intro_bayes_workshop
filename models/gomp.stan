@@ -1,6 +1,6 @@
 
 data {
-  int<lower=0> N;
+  int<lower=0> N; //number of observations
   int y[N]; //death counts
   vector[N] pop; //population counts
   vector[N] age_c; // age - 40
