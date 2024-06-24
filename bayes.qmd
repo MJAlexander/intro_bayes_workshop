@@ -119,12 +119,17 @@ stan_data <- list(y = round(d_male_19$deaths),
 Run the model and look at some output:
 
 ```{r}
+#| output: false
 mod <- stan(file = "models/gomp.stan", 
             data = stan_data,
             seed = 123,
             refresh = 0)
+```
+
+```{r}
 summary(mod)$summary[c("log_alpha", "beta"),]
 ```
+
 
 Some quick model checks:
 
@@ -269,14 +274,17 @@ stan_data <- list(y = y,
 Now fit the model (note: takes a while):
 
 ```{r}
+#| output: false
 mod <- stan(file = "models/gomp_time.stan", 
             data = stan_data,
             seed = 852,
             refresh = 0)
+```
+
+```{r}
 summary(mod)$summary[paste0("beta[", 1:(length(years)), "]"),]
 traceplot(mod, pars = c("beta[1]"))
 ```
-
 
 ## Plot parameter estimates over time
 
@@ -364,6 +372,7 @@ stan_data <- list(N = length(40:59),
 Fit the model:
 
 ```{r}
+#| output: false
 mod <- stan(file = "models/gomp_partial_data.stan", 
             data = stan_data,
             seed = 15,
