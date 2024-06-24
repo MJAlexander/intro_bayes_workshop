@@ -3,7 +3,7 @@ title: "Introduction to Bayesian Models for Demographers"
 author: "Monica Alexander"
 format: pdf
 number-sections: true
-subtitle: "Summer Incubator Workshop, 6 June 2023"
+subtitle: "Summer Incubator Workshop, 25 June 2024"
 toc: true
 execute: 
   echo: true
@@ -13,7 +13,7 @@ execute:
 
 # Overview
 
-This Quarto document illustrates how to fit a Gompertz mortality model in a Bayesian framework using Stan. We will be using data from the Canadian HMD as an example. 
+This Quarto document illustrates how to fit a Gompertz mortality model in a Bayesian framework using Stan, with a couple of extensions. We will be using data from the Canadian HMD, and some simulated data, as an example. 
 
 # Packages required 
 
@@ -30,7 +30,7 @@ library(janitor)
 
 # Data
 
-For the following examples we're going to using death and population counts by age and sex for Ontario, sourced from the Canadian Human Mortality Database project. We can read the data files in directly from the URLs: 
+For the following two examples we're going to using death and population counts by age and sex for Ontario, sourced from the Canadian Human Mortality Database project. We can read the data files in directly from the URLs: 
 
 ```{r}
 dd <- read_table("https://www.prdh.umontreal.ca/BDLC/data/ont/Deaths_1x1.txt", skip = 1)
@@ -121,7 +121,7 @@ Run the model and look at some output:
 ```{r}
 mod <- stan(file = "models/gomp.stan", 
             data = stan_data,
-            seed = 853,
+            seed = 123,
             refresh = 0)
 summary(mod)$summary[c("log_alpha", "beta"),]
 ```
@@ -129,6 +129,7 @@ summary(mod)$summary[c("log_alpha", "beta"),]
 Some quick model checks:
 
 - A traceplot plots the sampled values for a particular parameter across iterations. For a well mixing MCMC chain, you want it to look like a 'fuzzy caterpillar'
+- The pairs plot shows you the joint distribution of the sampled parameter values, and can be useful to diagnose problems in particular parts of the parameter space
 
 ```{r}
 pars <- c("log_alpha", "beta")
@@ -138,7 +139,7 @@ pairs(mod, pars = pars)
 
 ## Help! I'm drowning in samples
 
-What is the output we're actually interested in? The posterior samples. The 'classic' way of extracting using functions from te rstan package:
+What is the output we're actually interested in? The posterior samples. The 'classic' way of extracting using functions from the rstan package:
 
 ```{r}
 samps <- rstan::extract(mod)
@@ -172,7 +173,8 @@ Above, we wrote our own Stan model to fit a Gompertz model to one year. This is 
 ```{r}
 mod_pois_rsarm <- stan_glm(deaths ~ age_c + offset(log(pop)),
                      data = d_male_19, 
-                     family = poisson)
+                     family = poisson, 
+                     refresh = 0)
 
 summary(mod_pois_rsarm)
 ```
@@ -186,7 +188,7 @@ Check our Bayes results against standard GLM:
 summary(lm(log_mx~age_c, data = d_male_19))
 summary(glm(deaths~age_c+offset(log(pop)), family = poisson, data = d_male_19))
 ```
-# Calculate and plot some results
+## Calculate and plot some results
 
 Now we can combine the `tidybayes` syntax with `ggplot` to plot some results. For example, here's the data versus the estimates for the linear predictor:
 
@@ -202,7 +204,6 @@ mod |>
   geom_ribbon(aes(x = age, ymin = .lower, ymax = .upper), alpha = 0.2)
 ```
 
-
 A neat thing about working with samples is that we can easily get estimates and uncertainty for a transformed version of our parameters. For example, let's calculate the modal age at death (which for Gompertz mortality is a function of $\alpha$ and $\beta$, see [here](https://www.demographic-research.org/volumes/vol32/36/)).
 
 ```{r}
@@ -211,6 +212,9 @@ mod |>
   mutate(mode_age = 1/beta*log(beta/exp(log_alpha))) |> 
   median_qi()
 ```
+## Question for you
+
+Open the Stan model and edit the priors to be more informative. What do you expect to happen to the resulting estimates? What happens if you set very informative, but nonsensical priors? (e.g., $\beta \sim N(0.5, 0.001^2)$)
 
 # Model over time
 
@@ -262,7 +266,7 @@ stan_data <- list(y = y,
 
 ```
 
-Now fit the model:
+Now fit the model (note: takes a while):
 
 ```{r}
 mod <- stan(file = "models/gomp_time.stan", 
@@ -303,4 +307,110 @@ mod |>
 ```
 
 
+## Question for you
 
+Can you forecast mortality rates with this model? If so, how? What are the assumptions behind the forecasts?
+
+# Partial data observed
+
+Now we're going to switch gears a bit and have a look at the situation where we have mortality rates for five geographic areas, but in one area we only have partial information. This is based on simulated data (you can have a look to see how I generated it based on the `simulated_data.R` script). 
+
+For 4 areas, we have deaths and population counts from ages 40 up to 60:
+
+```{r}
+df <- read_rds("data/sim.rds")
+df
+```
+
+For one region, we just have $_{20}q_{40}$, that is, the probability of dying between ages 40 and 60:
+
+```{r}
+q40 <- read_rds("data/q40.rds")
+q40
+```
+
+## Relating $_{20}q_{40}$ to the Gompertz model
+
+We want to fit a Gompertz model to each of the five areas (even the one with just a summary indicator). How to do this? Well, if we tell Stan how $_{20}q_{40}$ relates to $\mu_x$, then the model has at least some information to estimate $\alpha$ and $\beta$. In particular, for each area, we're assuming:
+$$
+_1p_x = e^{-\mu_x}
+$$
+where $\mu_x = \alpha e^{\beta x}$  and
+$$
+_{20}q_{40} = 1 - \prod_{x=40}^{60} {_1p_x}
+$$
+Check the Stan file `gomp_partial.stan` to see this translated into code.
+## Fit the model
+
+Get the data in the right format. Note that everything is a matrix now because we have more than one area:
+```{r}
+y <- as.matrix(df |> 
+  pivot_wider(names_from = "area", values_from = "deaths") |> 
+  select(-age, -pop))
+pop <- as.matrix(df |> 
+  select(-deaths) |> 
+  pivot_wider(names_from = "area", values_from = "pop") |> 
+  select(-age))
+
+stan_data <- list(N = length(40:59),
+                  M = 4,
+                  K = 5,
+                  y = y,
+                  pop = pop,
+                  z = q40,
+                  age_c = (40:59)-40)
+```
+
+Fit the model:
+
+```{r}
+mod <- stan(file = "models/gomp_partial_data.stan", 
+            data = stan_data,
+            seed = 15,
+            control = list(adapt_delta = 0.96),
+            iter = 2500,
+            refresh = 0)
+```
+
+```{r}
+traceplot(mod, c("log_alpha"))
+traceplot(mod, c("beta"))
+```
+
+Let's plot the fitted lines (with uncertainty) with the observed data for each region. Notice the difference in uncertainty around area 5!
+
+```{r}
+mod |> 
+  gather_draws(mu[i,j]) |> 
+  median_qi() |> 
+  mutate(age = i-1+40) |> 
+  rename(area = j) |> 
+  left_join(df) |> 
+  mutate(log_mx = log(deaths/pop)) |> 
+  ggplot(aes(age, log_mx))+
+  geom_point(aes(color = factor(area)))+
+  geom_line(aes(age, .value, color = factor(area)))+
+  geom_ribbon(aes(age, ymin = .lower, ymax = .upper, fill = factor(area)), alpha = 0.5)+
+  scale_color_brewer(name = "Area", palette = "Set1")+
+  scale_fill_brewer(name = "Area", palette = "Set1")+
+  labs(title = "Data and estimates of adult mortality by geographic area", y = "log mortality rate")
+```
+## Compare parameter estimates against the truth
+
+Here's what we estimated:
+
+```{r}
+mod |> 
+  gather_draws(log_alpha[i], beta[i]) |> 
+  median_qi()
+```
+
+And here's the truth (the values underlying the simulation):
+
+```{r}
+read_rds("data/true_params.rds")
+```
+
+## Question for you
+
+I arbitrarily set the population to be 5,000 people per age in the simulation. If we increased the population size to 50,000, what would you expect to happen to the simulated mortality rates? What about to the parameter estimates?
